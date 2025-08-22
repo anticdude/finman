@@ -9,9 +9,9 @@ requireLogin();
 // Database configuration
 $CONFIG = [
   'DB_HOST' => 'localhost',
-  'DB_USER' => 'root',
+  'DB_USER' => 'u831088057_finman',
   'DB_PASS' => '',
-  'DB_NAME' => 'finman',
+  'DB_NAME' => 'u831088057_finman',
   'APP_NAME' => 'Smart Finance Manager',
 ];
 

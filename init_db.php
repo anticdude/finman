@@ -3,9 +3,9 @@
 
 // Database configuration
 define('DB_HOST', 'localhost');
-define('DB_USER', 'root');
-define('DB_PASS', '');
-define('DB_NAME', 'finman');
+define('DB_USER', 'u831088057_finman');
+define('DB_PASS', 'Anakaya@05');
+define('DB_NAME', 'u831088057_finman');
 
 // Connect to database
 $mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS);
