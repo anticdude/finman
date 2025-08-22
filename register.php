@@ -2,7 +2,7 @@
 // Database configuration
 define('DB_HOST', 'localhost');
 define('DB_USER', 'u831088057_finman');
-define('DB_PASS', '');
+define('DB_PASS', 'Anakaya@05');
 define('DB_NAME', 'u831088057_finman');
 
 // Connect to database
