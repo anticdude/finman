@@ -73,21 +73,52 @@ if ($action==='save_txn') {
   
   if ($id>0) { 
     $stmt=$mysqli->prepare("UPDATE transactions SET dt=?, type=?, category_id=?, amount=?, account=?, notes=?, user_id=? WHERE id=?"); 
-    $stmt->bind_param('ssiddsii',$dt,$type,$category_id,$amount,$account,$notes,$user_id,$id); 
+    $stmt->bind_param('ssidssii',$dt,$type,$category_id,$amount,$account,$notes,$user_id,$id); 
   } else { 
     $stmt=$mysqli->prepare("INSERT INTO transactions (dt,type,category_id,amount,account,notes,user_id) VALUES (?,?,?,?,?,?,?)"); 
-    $stmt->bind_param('ssiddsi',$dt,$type,$category_id,$amount,$account,$notes,$user_id); 
+    $stmt->bind_param('ssidssi',$dt,$type,$category_id,$amount,$account,$notes,$user_id); 
   }
   $stmt->execute(); header('Location:?tab=transactions'); exit;
 }
 if ($action==='delete_txn') { $id=(int)post('id'); $stmt=$mysqli->prepare("DELETE FROM transactions WHERE id=?"); $stmt->bind_param('i',$id); $stmt->execute(); header('Location:?tab=transactions'); exit; }
 
 // Loans
+// Replace the existing save_loan action with this:
 if ($action==='save_loan') {
-  $id=(int)post('id',0); $name=trim(post('name')); $emi=(float)post('monthly_emi'); $start=post('start_date'); $end=post('end_date')?:NULL; $rate=post('interest_rate')!==''?(float)post('interest_rate'):NULL; $priority=(int)post('priority'); $active=(int)post('active',1);
-  if ($id>0) { $stmt=$mysqli->prepare("UPDATE loans SET name=?, monthly_emi=?, start_date=?, end_date=?, interest_rate=?, priority=?, active=? WHERE id=?"); $stmt->bind_param('sdsssiii',$name,$emi,$start,$end,$rate,$priority,$active,$id); }
-  else { $stmt=$mysqli->prepare("INSERT INTO loans (name,monthly_emi,start_date,end_date,interest_rate,priority,active) VALUES (?,?,?,?,?,?,?)"); $stmt->bind_param('sdsssii',$name,$emi,$start,$end,$rate,$priority,$active); }
-  $stmt->execute(); header('Location:?tab=loans'); exit;
+  $id=(int)post('id',0); $name=trim(post('name')); $emi=(float)post('monthly_emi'); 
+  $start=post('start_date'); $due=post('due_date')?:NULL; $end=post('end_date')?:NULL; 
+  $rate=post('interest_rate')!==''?(float)post('interest_rate'):NULL; 
+  $priority=(int)post('priority'); $notes=trim(post('notes'))?:NULL;
+  $status=post('payment_status') ?: 'pending'; $active=(int)post('active',1);
+  
+  if ($id>0) { 
+    $stmt=$mysqli->prepare("UPDATE loans SET name=?, monthly_emi=?, start_date=?, due_date=?, end_date=?, interest_rate=?, priority=?, notes=?, payment_status=?, active=? WHERE id=?"); 
+    $stmt->bind_param('sdssssdissii',$name,$emi,$start,$due,$end,$rate,$priority,$notes,$status,$active,$id); 
+  } else { 
+    $stmt=$mysqli->prepare("INSERT INTO loans (name,monthly_emi,start_date,due_date,end_date,interest_rate,priority,notes,payment_status,active) VALUES (?,?,?,?,?,?,?,?,?,?)"); 
+    $stmt->bind_param('sdssssdissi',$name,$emi,$start,$due,$end,$rate,$priority,$notes,$status,$active); 
+  }
+  $stmt->execute(); 
+  
+  // If it's a new loan and active, create a transaction for the current month
+  if ($id === 0 && $active) {
+    $currentMonth = date('Y-m-01');
+    $loanName = "EMI: " . $name;
+    
+    // Check if this loan's EMI already exists for current month
+    $checkStmt = $mysqli->prepare("SELECT id FROM transactions WHERE notes = ? AND dt BETWEEN ? AND LAST_DAY(?)");
+    $checkStmt->bind_param('sss', $loanName, $currentMonth, $currentMonth);
+    $checkStmt->execute();
+    
+    if ($checkStmt->get_result()->num_rows === 0) {
+      // Create expense transaction for the EMI
+      $txnStmt = $mysqli->prepare("INSERT INTO transactions (dt, type, amount, account, notes, created_at) VALUES (?, 'expense', ?, 'Loan', ?, NOW())");
+      $txnStmt->bind_param('sds', $due, $emi, $loanName);
+      $txnStmt->execute();
+    }
+  }
+  
+  header('Location:?tab=loans'); exit;
 }
 if ($action==='delete_loan') { $id=(int)post('id'); $stmt=$mysqli->prepare("DELETE FROM loans WHERE id=?"); $stmt->bind_param('i',$id); $stmt->execute(); header('Location:?tab=loans'); exit; }
 
@@ -560,14 +591,17 @@ $upcomingBillsResult = $upcomingBills->get_result();
             <div class="card-body p-0">
               <div class="list-group list-group-flush">
                 <?php while($ln = $upcomingBillsResult->fetch_assoc()): ?>
-                <div class="list-group-item d-flex justify-content-between align-items-center">
-                  <div>
-                    <div class="fw-bold"><?= h($ln['name']) ?></div>
-                    <small class="text-muted">Due on <?= h(date('M j, Y', strtotime($ln['start_date']))) ?></small>
-                  </div>
-                  <span class="text-warning">₹<?= number_format($ln['monthly_emi'], 2) ?></span>
-                </div>
-                <?php endwhile; ?>
+<div class="list-group-item d-flex justify-content-between align-items-center">
+  <div>
+    <div class="fw-bold"><?= h($ln['name']) ?></div>
+    <small class="text-muted">Due on <?= h(date('M j, Y', strtotime($ln['start_date']))) ?></small>
+    <?php if ($ln['payment_status'] === 'overdue'): ?>
+      <span class="badge bg-danger mt-1">Overdue</span>
+    <?php endif; ?>
+  </div>
+  <span class="text-warning">₹<?= number_format($ln['monthly_emi'], 2) ?></span>
+</div>
+<?php endwhile; ?>
               </div>
             </div>
           </div>
@@ -662,15 +696,64 @@ $upcomingBillsResult = $upcomingBills->get_result();
                     <option value="expense" selected>Expense</option>
                   </select>
                 </div>
-                <div class="mb-3">
-                  <label class="form-label">Category</label>
-                  <select class="form-select" name="category_id">
-                    <option value="">— Select Category —</option>
-                    <?php while($c = $catsExpense->fetch_assoc()): ?>
-                    <option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option>
-                    <?php endwhile; ?>
-                  </select>
-                </div>
+               <div class="mb-3">
+  <label class="form-label">Category</label>
+  <select class="form-select" name="category_id" id="categorySelect">
+    <option value="">— Select Category —</option>
+    <?php 
+    // Reset pointers
+    $catsIncome->data_seek(0);
+    $catsExpense->data_seek(0);
+    
+    // Display expense categories by default
+    while($c = $catsExpense->fetch_assoc()): ?>
+    <option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option>
+    <?php endwhile; ?>
+  </select>
+</div>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const typeSelect = document.querySelector('select[name="type"]');
+    const categorySelect = document.getElementById('categorySelect');
+    
+    // Store categories in JavaScript arrays
+    const incomeCategories = [
+      <?php 
+      $catsIncome->data_seek(0);
+      while($c = $catsIncome->fetch_assoc()): ?>
+        {id: <?= (int)$c['id'] ?>, name: '<?= h($c['name']) ?>'},
+      <?php endwhile; ?>
+    ];
+    
+    const expenseCategories = [
+      <?php 
+      $catsExpense->data_seek(0);
+      while($c = $catsExpense->fetch_assoc()): ?>
+        {id: <?= (int)$c['id'] ?>, name: '<?= h($c['name']) ?>'},
+      <?php endwhile; ?>
+    ];
+    
+    // Function to update categories based on type
+    function updateCategories() {
+      const selectedType = typeSelect.value;
+      const categories = selectedType === 'income' ? incomeCategories : expenseCategories;
+      
+      // Clear current options
+      categorySelect.innerHTML = '<option value="">— Select Category —</option>';
+      
+      // Add new options
+      categories.forEach(category => {
+        const option = document.createElement('option');
+        option.value = category.id;
+        option.textContent = category.name;
+        categorySelect.appendChild(option);
+      });
+    }
+    
+    // Add event listener
+    typeSelect.addEventListener('change', updateCategories);
+  });
+</script>
                 <div class="mb-3">
                   <label class="form-label">User</label>
                   <select class="form-select" name="user_id">
@@ -887,6 +970,9 @@ $upcomingBillsResult = $upcomingBills->get_result();
                       <th>End Date</th>
                       <th>Interest Rate</th>
                       <th>Priority</th>
+                      <th>Due Date</th>
+                      <th>Notes</th>
+                      <th>Payment Status</th>
                       <th>Status</th>
                       <th class="text-end">Action</th>
                     </tr>
@@ -900,6 +986,16 @@ $upcomingBillsResult = $upcomingBills->get_result();
                       <td><?= h($ln['end_date'] ?? '—') ?></td>
                       <td><?= $ln['interest_rate'] ? h($ln['interest_rate']).'%' : '—' ?></td>
                       <td><?= (int)$ln['priority'] ?></td>
+                      <td><?= h($ln['due_date'] ?? '—') ?></td>
+                      <td><?= h($ln['notes'] ?? '—') ?></td>
+                      <td>
+                        <span class="badge <?= 
+                        $ln['payment_status'] === 'paid' ? 'bg-success' : 
+                        ($ln['payment_status'] === 'overdue' ? 'bg-danger' : 'bg-warning') 
+                        ?>">
+                        <?= ucfirst(h($ln['payment_status'] ?? 'pending')) ?>
+                        </span>
+                      </td>
                       <td>
                         <span class="badge <?= (int)$ln['active'] ? 'bg-success' : 'bg-secondary' ?>">
                           <?= (int)$ln['active'] ? 'Active' : 'Inactive' ?>
@@ -956,6 +1052,12 @@ $upcomingBillsResult = $upcomingBills->get_result();
                     <input type="date" class="form-control" name="start_date" required>
                   </div>
                   <div class="col-md-6 mb-3">
+  <label class="form-label">Due Date (each month)</label>
+  <input type="number" min="1" max="31" class="form-control" name="due_date" required>
+  <small class="text-muted">Day of the month when EMI is due</small>
+</div>
+
+                  <div class="col-md-6 mb-3">
                     <label class="form-label">End Date (optional)</label>
                     <input type="date" class="form-control" name="end_date">
                   </div>
@@ -965,6 +1067,18 @@ $upcomingBillsResult = $upcomingBills->get_result();
                     <label class="form-label">Priority (1=highest)</label>
                     <input type="number" min="1" class="form-control" name="priority" value="1" required>
                   </div>
+                  <div class="mb-3">
+  <label class="form-label">Notes</label>
+  <textarea class="form-control" name="notes" rows="2"></textarea>
+</div>
+<div class="mb-3">
+  <label class="form-label">Payment Status</label>
+  <select class="form-select" name="payment_status">
+    <option value="pending" selected>Pending</option>
+    <option value="paid">Paid</option>
+    <option value="overdue">Overdue</option>
+  </select>
+</div>
                   <div class="col-md-6 mb-3">
                     <label class="form-label">Status</label>
                     <select class="form-select" name="active">
