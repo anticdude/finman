@@ -1,33 +1,29 @@
 <?php
-
 // Include authentication functions
 require_once 'auth.php';
 
 // Redirect to login if not authenticated
 requireLogin();
-
+include 'db.php';
 // Database configuration
-$CONFIG = [
-  'DB_HOST' => 'localhost',
-  'DB_USER' => 'u831088057_finman',
-  'DB_PASS' => 'Anakaya@05',
-  'DB_NAME' => 'u831088057_finman',
-  'APP_NAME' => 'Smart Finance Manager',
-];
+// $CONFIG = [
+//   'DB_HOST' => 'localhost',
+//   'DB_USER' => 'u831088057_finman',
+//   'DB_PASS' => 'Anakaya@05',
+//   'DB_NAME' => 'u831088057_finman',
+//   'APP_NAME' => 'Smart Finance Manager',
+// ];
 
-// ===================== DB CONNECTION ===================== //
-mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-try {
-    $mysqli = new mysqli($CONFIG['DB_HOST'], $CONFIG['DB_USER'], $CONFIG['DB_PASS'], $CONFIG['DB_NAME']);
-    $mysqli->set_charset('utf8mb4');
-} catch (Exception $e) {
-    die("Database connection failed: " . $e->getMessage());
-}
-
-// Rest of your existing code continues here...
+// // ===================== DB CONNECTION ===================== //
+// mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+// try {
+//     $mysqli = new mysqli($CONFIG['DB_HOST'], $CONFIG['DB_USER'], $CONFIG['DB_PASS'], $CONFIG['DB_NAME']);
+//     $mysqli->set_charset('utf8mb4');
+// } catch (Exception $e) {
+//     die("Database connection failed: " . $e->getMessage());
+// }
 
 // ===================== HELPERS ===================== //
-// session_start();
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 function post($k,$d=null){ return $_POST[$k] ?? $d; }
 function getv($k,$d=null){ return $_GET[$k] ?? $d; }
@@ -39,6 +35,27 @@ $action = post('action') ?? getv('action');
 check_csrf();
 
 // ===================== ACTIONS ===================== //
+// User
+if ($action==='save_user') {
+  $id = (int)post('id',0); $name = trim(post('name')); $email = trim(post('email'));
+  if ($id>0) { 
+    $stmt=$mysqli->prepare("UPDATE users SET name=?, email=? WHERE id=?"); 
+    $stmt->bind_param('ssi',$name,$email,$id); 
+  } else { 
+    $stmt=$mysqli->prepare("INSERT INTO users (name, email) VALUES (?,?)"); 
+    $stmt->bind_param('ss',$name,$email); 
+  }
+  $stmt->execute(); header('Location: ?tab=users'); exit;
+}
+if ($action==='delete_user') { 
+  $id=(int)post('id'); 
+  $stmt=$mysqli->prepare("DELETE FROM users WHERE id=?"); 
+  $stmt->bind_param('i',$id); 
+  $stmt->execute(); 
+  header('Location:?tab=users'); 
+  exit; 
+}
+
 // Category
 if ($action==='save_category') {
   $id = (int)post('id',0); $name = trim(post('name')); $type = post('type');
@@ -50,9 +67,17 @@ if ($action==='delete_category') { $id=(int)post('id'); $stmt=$mysqli->prepare("
 
 // Transaction
 if ($action==='save_txn') {
-  $id=(int)post('id',0); $dt=post('dt'); $type=post('type'); $category_id=(int)post('category_id')?:NULL; $amount=(float)post('amount'); $account=trim(post('account'))?:NULL; $notes=trim(post('notes'))?:NULL;
-  if ($id>0) { $stmt=$mysqli->prepare("UPDATE transactions SET dt=?, type=?, category_id=?, amount=?, account=?, notes=? WHERE id=?"); $stmt->bind_param('ssiddsi',$dt,$type,$category_id,$amount,$account,$notes,$id); }
-  else { $stmt=$mysqli->prepare("INSERT INTO transactions (dt,type,category_id,amount,account,notes) VALUES (?,?,?,?,?,?)"); $stmt->bind_param('ssidds',$dt,$type,$category_id,$amount,$account,$notes); }
+  $id=(int)post('id',0); $dt=post('dt'); $type=post('type'); $category_id=(int)post('category_id')?:NULL; 
+  $amount=(float)post('amount'); $account=trim(post('account'))?:NULL; $notes=trim(post('notes'))?:NULL;
+  $user_id=(int)post('user_id')?:NULL; // Added user_id
+  
+  if ($id>0) { 
+    $stmt=$mysqli->prepare("UPDATE transactions SET dt=?, type=?, category_id=?, amount=?, account=?, notes=?, user_id=? WHERE id=?"); 
+    $stmt->bind_param('ssiddsii',$dt,$type,$category_id,$amount,$account,$notes,$user_id,$id); 
+  } else { 
+    $stmt=$mysqli->prepare("INSERT INTO transactions (dt,type,category_id,amount,account,notes,user_id) VALUES (?,?,?,?,?,?,?)"); 
+    $stmt->bind_param('ssiddsi',$dt,$type,$category_id,$amount,$account,$notes,$user_id); 
+  }
   $stmt->execute(); header('Location:?tab=transactions'); exit;
 }
 if ($action==='delete_txn') { $id=(int)post('id'); $stmt=$mysqli->prepare("DELETE FROM transactions WHERE id=?"); $stmt->bind_param('i',$id); $stmt->execute(); header('Location:?tab=transactions'); exit; }
@@ -78,8 +103,8 @@ if ($action==='delete_cc') { $id=(int)post('id'); $stmt=$mysqli->prepare("DELETE
 // Export CSV
 if ($action==='export_csv') {
   header('Content-Type: text/csv'); header('Content-Disposition: attachment; filename="transactions.csv"'); $out=fopen('php://output','w');
-  fputcsv($out,['id','date','type','category','amount','account','notes']);
-  $res=$mysqli->query("SELECT t.id,t.dt,t.type,c.name cat,t.amount,t.account,t.notes FROM transactions t LEFT JOIN categories c ON t.category_id=c.id ORDER BY t.dt DESC, t.id DESC");
+  fputcsv($out,['id','date','type','category','amount','account','notes','user']);
+  $res=$mysqli->query("SELECT t.id,t.dt,t.type,c.name cat,t.amount,t.account,t.notes,u.name user FROM transactions t LEFT JOIN categories c ON t.category_id=c.id LEFT JOIN users u ON t.user_id=u.id ORDER BY t.dt DESC, t.id DESC");
   while($row=$res->fetch_assoc()){ fputcsv($out,$row); }
   fclose($out); exit;
 }
@@ -87,11 +112,29 @@ if ($action==='export_csv') {
 // Import CSV
 if ($action==='import_csv' && isset($_FILES['csv']) && is_uploaded_file($_FILES['csv']['tmp_name'])) {
   $f=fopen($_FILES['csv']['tmp_name'],'r'); $header=fgetcsv($f);
-  $stmt=$mysqli->prepare("INSERT INTO transactions (dt,type,category_id,amount,account,notes) VALUES (?,?,?,?,?,?)");
+  $stmt=$mysqli->prepare("INSERT INTO transactions (dt,type,category_id,amount,account,notes,user_id) VALUES (?,?,?,?,?,?,?)");
   while(($row=fgetcsv($f))!==false){
-    $date=$row[1] ?? $row[0]; $type=$row[2] ?? $row[1]; $catName=$row[3] ?? $row[2]; $amount=(float)($row[4] ?? $row[3]); $account=$row[5] ?? ($row[4] ?? NULL); $notes=$row[6] ?? ($row[5] ?? NULL);
+    $date=$row[1] ?? $row[0]; $type=$row[2] ?? $row[1]; $catName=$row[3] ?? $row[2]; $amount=(float)($row[4] ?? $row[3]); $account=$row[5] ?? ($row[4] ?? NULL); $notes=$row[6] ?? ($row[5] ?? NULL); $userName=$row[7] ?? ($row[6] ?? NULL);
     $catId=NULL; if ($catName) { $find=$mysqli->prepare("SELECT id,type FROM categories WHERE name=?"); $find->bind_param('s',$catName); $find->execute(); $r=$find->get_result()->fetch_assoc(); if($r){$catId=(int)$r['id'];} else { $tguess=in_array(strtolower($catName),['salary','rent','other income'])?'income':'expense'; $ins=$mysqli->prepare("INSERT INTO categories (name,type) VALUES (?,?)"); $ins->bind_param('ss',$catName,$tguess); $ins->execute(); $catId=$ins->insert_id; }}
-    $stmt->bind_param('ssidds',$date,$type,$catId,$amount,$account,$notes); $stmt->execute();
+    
+    $userId=NULL;
+    if ($userName) {
+      $findUser=$mysqli->prepare("SELECT id FROM users WHERE name=?"); 
+      $findUser->bind_param('s',$userName); 
+      $findUser->execute(); 
+      $rUser=$findUser->get_result()->fetch_assoc(); 
+      if($rUser){
+        $userId=(int)$rUser['id'];
+      } else {
+        $insUser=$mysqli->prepare("INSERT INTO users (name) VALUES (?)"); 
+        $insUser->bind_param('s',$userName); 
+        $insUser->execute(); 
+        $userId=$insUser->insert_id;
+      }
+    }
+    
+    $stmt->bind_param('ssiddsi',$date,$type,$catId,$amount,$account,$notes,$userId); 
+    $stmt->execute();
   }
   fclose($f); header('Location:?tab=transactions'); exit;
 }
@@ -134,16 +177,18 @@ while ($row = $expenseResult->fetch_assoc()) {
 $catsIncome=$mysqli->query("SELECT * FROM categories WHERE type='income' ORDER BY name");
 $catsExpense=$mysqli->query("SELECT * FROM categories WHERE type='expense' ORDER BY name");
 $allCats=$mysqli->query("SELECT * FROM categories ORDER BY type,name");
-$txns=$mysqli->prepare("SELECT t.*, c.name cat FROM transactions t LEFT JOIN categories c ON t.category_id=c.id WHERE dt BETWEEN ? AND ? ORDER BY dt DESC, id DESC");
+$usersList=$mysqli->query("SELECT * FROM users ORDER BY name"); // Added users list
+$txns=$mysqli->prepare("SELECT t.*, c.name cat, u.name user FROM transactions t LEFT JOIN categories c ON t.category_id=c.id LEFT JOIN users u ON t.user_id=u.id WHERE dt BETWEEN ? AND ? ORDER BY dt DESC, id DESC");
 $txns->bind_param('ss',$start,$end); $txns->execute(); $txList=$txns->get_result();
 $loansList=$mysqli->query("SELECT * FROM loans ORDER BY active DESC, priority ASC, id DESC");
 $cardsList=$mysqli->query("SELECT * FROM credit_cards ORDER BY active DESC, name ASC");
 
 // Recent transactions for dashboard
 $recentTxns = $mysqli->prepare("
-    SELECT t.*, c.name cat 
+    SELECT t.*, c.name cat, u.name user 
     FROM transactions t 
     LEFT JOIN categories c ON t.category_id=c.id 
+    LEFT JOIN users u ON t.user_id=u.id
     ORDER BY t.dt DESC, t.id DESC 
     LIMIT 5
 ");
@@ -356,26 +401,16 @@ $upcomingBillsResult = $upcomingBills->get_result();
       <li><a href="?tab=dashboard" class="<?= $tab === 'dashboard' ? 'active' : '' ?>"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
       <li><a href="?tab=transactions" class="<?= $tab === 'transactions' ? 'active' : '' ?>"><i class="bi bi-arrow-left-right"></i> Transactions</a></li>
       <li><a href="?tab=categories" class="<?= $tab === 'categories' ? 'active' : '' ?>"><i class="bi bi-tag"></i> Categories</a></li>
+      <li><a href="?tab=users" class="<?= $tab === 'users' ? 'active' : '' ?>"><i class="bi bi-people"></i> Users</a></li> <!-- Added Users tab -->
       <li><a href="?tab=loans" class="<?= $tab === 'loans' ? 'active' : '' ?>"><i class="bi bi-currency-exchange"></i> Loans & EMIs</a></li>
       <li><a href="?tab=cards" class="<?= $tab === 'cards' ? 'active' : '' ?>"><i class="bi bi-credit-card"></i> Credit Cards</a></li>
       <li><a href="?tab=import" class="<?= $tab === 'import' ? 'active' : '' ?>"><i class="bi bi-upload"></i> Import/Export</a></li>
       <li class="mt-auto">
-  <a href="logout.php" class="text-danger">
-    <i class="bi bi-box-arrow-right"></i> Logout (<?php echo htmlspecialchars(getCurrentUserEmail()); ?>)
-  </a>
-</li>
+        <a href="logout.php" class="text-danger">
+          <i class="bi bi-box-arrow-right"></i> Logout (<?php echo htmlspecialchars(getCurrentUserEmail()); ?>)
+        </a>
+      </li>
     </ul>
-    
-    <div class="mt-auto p-3 text-center">
-      <div class="btn-group" role="group">
-        <button type="button" class="btn btn-outline-light btn-sm">
-          <i class="bi bi-moon"></i>
-        </button>
-        <button type="button" class="btn btn-outline-light btn-sm">
-          <i class="bi bi-box-arrow-right"></i>
-        </button>
-      </div>
-    </div>
   </nav>
 
   <!-- Content -->
@@ -391,6 +426,8 @@ $upcomingBillsResult = $upcomingBills->get_result();
             Manage your income and expenses
           <?php elseif ($tab === 'categories'): ?>
             Organize your transaction categories
+          <?php elseif ($tab === 'users'): ?>
+            Manage users for tracking expenses
           <?php elseif ($tab === 'loans'): ?>
             Track your loans and EMIs
           <?php elseif ($tab === 'cards'): ?>
@@ -502,7 +539,7 @@ $upcomingBillsResult = $upcomingBills->get_result();
                 <div class="list-group-item d-flex justify-content-between align-items-center">
                   <div>
                     <div class="fw-bold"><?= h($t['cat'] ?? 'Uncategorized') ?></div>
-                    <small class="text-muted"><?= h($t['dt']) ?> • <?= h($t['account'] ?? 'No Account') ?></small>
+                    <small class="text-muted"><?= h($t['dt']) ?> • <?= h($t['account'] ?? 'No Account') ?> • <?= h($t['user'] ?? 'No User') ?></small>
                   </div>
                   <span class="<?= $t['type'] === 'income' ? 'text-success' : 'text-danger' ?>">
                     <?= $t['type'] === 'income' ? '+' : '-' ?>₹<?= number_format($t['amount'], 2) ?>
@@ -563,6 +600,7 @@ $upcomingBillsResult = $upcomingBills->get_result();
                       <th>Date</th>
                       <th>Type</th>
                       <th>Category</th>
+                      <th>User</th>
                       <th>Account</th>
                       <th class="text-end">Amount</th>
                       <th>Notes</th>
@@ -579,6 +617,7 @@ $upcomingBillsResult = $upcomingBills->get_result();
                         </span>
                       </td>
                       <td><?= h($t['cat'] ?? '—') ?></td>
+                      <td><?= h($t['user'] ?? '—') ?></td>
                       <td><?= h($t['account'] ?? '') ?></td>
                       <td class="text-end">₹<?= number_format($t['amount'], 2) ?></td>
                       <td><?= h($t['notes'] ?? '') ?></td>
@@ -618,24 +657,29 @@ $upcomingBillsResult = $upcomingBills->get_result();
                 </div>
                 <div class="mb-3">
                   <label class="form-label">Type</label>
-                  <select name="type" class="form-select" required>
+                  <select class="form-select" name="type" required>
                     <option value="income">Income</option>
                     <option value="expense" selected>Expense</option>
                   </select>
                 </div>
                 <div class="mb-3">
                   <label class="form-label">Category</label>
-                  <select name="category_id" class="form-select">
-                    <optgroup label="Income">
-                      <?php while($c = $catsIncome->fetch_assoc()): ?>
-                        <option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option>
-                      <?php endwhile; ?>
-                    </optgroup>
-                    <optgroup label="Expense">
-                      <?php while($c = $catsExpense->fetch_assoc()): ?>
-                        <option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option>
-                      <?php endwhile; ?>
-                    </optgroup>
+                  <select class="form-select" name="category_id">
+                    <option value="">— Select Category —</option>
+                    <?php while($c = $catsExpense->fetch_assoc()): ?>
+                    <option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option>
+                    <?php endwhile; ?>
+                  </select>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">User</label>
+                  <select class="form-select" name="user_id">
+                    <option value="">— Select User —</option>
+                    <?php 
+                    $usersList->data_seek(0); // Reset pointer
+                    while($u = $usersList->fetch_assoc()): ?>
+                    <option value="<?= (int)$u['id'] ?>"><?= h($u['name']) ?></option>
+                    <?php endwhile; ?>
                   </select>
                 </div>
                 <div class="mb-3">
@@ -643,12 +687,12 @@ $upcomingBillsResult = $upcomingBills->get_result();
                   <input type="number" step="0.01" class="form-control" name="amount" required>
                 </div>
                 <div class="mb-3">
-                  <label class="form-label">Account (optional)</label>
-                  <input type="text" class="form-control" name="account" placeholder="e.g., HDFC, OneCard, Cash">
+                  <label class="form-label">Account</label>
+                  <input type="text" class="form-control" name="account">
                 </div>
                 <div class="mb-3">
                   <label class="form-label">Notes</label>
-                  <input type="text" class="form-control" name="notes" maxlength="255">
+                  <textarea class="form-control" name="notes" rows="2"></textarea>
                 </div>
               </div>
               <div class="modal-footer">
@@ -660,59 +704,123 @@ $upcomingBillsResult = $upcomingBills->get_result();
         </div>
       </div>
     <?php endif; ?>
-
+    
     <?php if($tab==='categories'): ?>
       <div class="row">
-        <div class="col-md-4">
+        <div class="col-md-6">
           <div class="card">
-            <div class="card-header">Add Category</div>
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <span>Income Categories</span>
+              <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#categoryModal" data-type="income">
+                <i class="bi bi-plus"></i> Add New
+              </button>
+            </div>
             <div class="card-body">
-              <form method="post">
-                <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
-                <input type="hidden" name="action" value="save_category">
-                <div class="mb-3">
-                  <label class="form-label">Name</label>
-                  <input class="form-control" name="name" required>
+              <div class="list-group list-group-flush">
+                <?php $catsIncome->data_seek(0); while($c = $catsIncome->fetch_assoc()): ?>
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                  <span><?= h($c['name']) ?></span>
+                  <form method="post" onsubmit="return confirm('Delete category?')">
+                    <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
+                    <input type="hidden" name="action" value="delete_category">
+                    <input type="hidden" name="id" value="<?= (int)$c['id'] ?>">
+                    <button class="btn btn-sm btn-outline-danger">Delete</button>
+                  </form>
                 </div>
-                <div class="mb-3">
-                  <label class="form-label">Type</label>
-                  <select class="form-select" name="type" required>
-                    <option value="income">Income</option>
-                    <option value="expense" selected>Expense</option>
-                  </select>
-                </div>
-                <button class="btn btn-primary w-100">Save Category</button>
-              </form>
+                <?php endwhile; ?>
+              </div>
             </div>
           </div>
         </div>
-        <div class="col-md-8">
+        <div class="col-md-6">
           <div class="card">
-            <div class="card-header">All Categories</div>
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <span>Expense Categories</span>
+              <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#categoryModal" data-type="expense">
+                <i class="bi bi-plus"></i> Add New
+              </button>
+            </div>
+            <div class="card-body">
+              <div class="list-group list-group-flush">
+                <?php $catsExpense->data_seek(0); while($c = $catsExpense->fetch_assoc()): ?>
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                  <span><?= h($c['name']) ?></span>
+                  <form method="post" onsubmit="return confirm('Delete category?')">
+                    <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
+                    <input type="hidden" name="action" value="delete_category">
+                    <input type="hidden" name="id" value="<?= (int)$c['id'] ?>">
+                    <button class="btn btn-sm btn-outline-danger">Delete</button>
+                  </form>
+                </div>
+                <?php endwhile; ?>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Category Modal -->
+      <div class="modal fade" id="categoryModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Add Category</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="post">
+              <div class="modal-body">
+                <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
+                <input type="hidden" name="action" value="save_category">
+                <input type="hidden" name="type" id="categoryType" value="expense">
+                <div class="mb-3">
+                  <label class="form-label">Category Name</label>
+                  <input type="text" class="form-control" name="name" required>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Category</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    <?php endif; ?>
+    
+    <?php if($tab==='users'): ?>
+      <div class="row">
+        <div class="col-12">
+          <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <span>Users</span>
+              <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#userModal">
+                <i class="bi bi-plus"></i> Add New
+              </button>
+            </div>
             <div class="card-body">
               <div class="table-responsive">
-                <table class="table table-sm align-middle">
+                <table class="table table-sm">
                   <thead>
                     <tr>
+                      <th>ID</th>
                       <th>Name</th>
-                      <th>Type</th>
+                      <th>Email</th>
                       <th class="text-end">Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <?php while($c = $allCats->fetch_assoc()): ?>
+                    <?php 
+                    $usersList->data_seek(0); 
+                    while($u = $usersList->fetch_assoc()): ?>
                     <tr>
-                      <td><?= h($c['name']) ?></td>
-                      <td>
-                        <span class="badge <?= $c['type'] === 'income' ? 'bg-success' : 'bg-danger' ?>">
-                          <?= h($c['type']) ?>
-                        </span>
-                      </td>
+                      <td><?= (int)$u['id'] ?></td>
+                      <td><?= h($u['name']) ?></td>
+                      <td><?= h($u['email'] ?? '—') ?></td>
                       <td class="text-end">
-                        <form method="post" onsubmit="return confirm('Delete category?')" class="d-inline">
+                        <form method="post" onsubmit="return confirm('Delete user?')" class="d-inline">
                           <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
-                          <input type="hidden" name="action" value="delete_category">
-                          <input type="hidden" name="id" value="<?= (int)$c['id'] ?>">
+                          <input type="hidden" name="action" value="delete_user">
+                          <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
                           <button class="btn btn-sm btn-outline-danger">Delete</button>
                         </form>
                       </td>
@@ -725,88 +833,83 @@ $upcomingBillsResult = $upcomingBills->get_result();
           </div>
         </div>
       </div>
-    <?php endif; ?>
-
-    <?php if($tab==='loans'): ?>
-      <div class="row">
-        <div class="col-md-4">
-          <div class="card">
-            <div class="card-header">Add Loan / EMI</div>
-            <div class="card-body">
-              <form method="post">
+      
+      <!-- User Modal -->
+      <div class="modal fade" id="userModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Add User</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="post">
+              <div class="modal-body">
                 <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
-                <input type="hidden" name="action" value="save_loan">
+                <input type="hidden" name="action" value="save_user">
+                <input type="hidden" name="id" value="0">
                 <div class="mb-3">
                   <label class="form-label">Name</label>
-                  <input class="form-control" name="name" required placeholder="e.g., Home Loan">
+                  <input type="text" class="form-control" name="name" required>
                 </div>
                 <div class="mb-3">
-                  <label class="form-label">Monthly EMI (₹)</label>
-                  <input type="number" step="0.01" class="form-control" name="monthly_emi" required>
+                  <label class="form-label">Email (optional)</label>
+                  <input type="email" class="form-control" name="email">
                 </div>
-                <div class="mb-3">
-                  <label class="form-label">Start Date</label>
-                  <input type="date" class="form-control" name="start_date" required>
-                </div>
-                <div class="mb-3">
-                  <label class="form-label">End Date (optional)</label>
-                  <input type="date" class="form-control" name="end_date">
-                </div>
-                <div class="mb-3">
-                  <label class="form-label">Interest % (optional)</label>
-                  <input type="number" step="0.01" class="form-control" name="interest_rate">
-                </div>
-                <div class="mb-3">
-                  <label class="form-label">Paydown Priority (1=highest)</label>
-                  <input type="number" class="form-control" name="priority" value="5">
-                </div>
-                <div class="mb-3">
-                  <label class="form-label">Active</label>
-                  <select class="form-select" name="active">
-                    <option value="1" selected>Yes</option>
-                    <option value="0">No</option>
-                  </select>
-                </div>
-                <button class="btn btn-primary w-100">Save Loan</button>
-              </form>
-            </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save User</button>
+              </div>
+            </form>
           </div>
         </div>
-        <div class="col-md-8">
+      </div>
+    <?php endif; ?>
+    
+    <?php if($tab==='loans'): ?>
+      <div class="row">
+        <div class="col-12">
           <div class="card">
-            <div class="card-header">Loans / EMIs</div>
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <span>Loans & EMIs</span>
+              <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#loanModal">
+                <i class="bi bi-plus"></i> Add New
+              </button>
+            </div>
             <div class="card-body">
               <div class="table-responsive">
                 <table class="table table-sm">
                   <thead>
                     <tr>
                       <th>Name</th>
-                      <th class="text-end">EMI</th>
-                      <th>Start</th>
-                      <th>End</th>
-                      <th>Rate%</th>
+                      <th>Monthly EMI</th>
+                      <th>Start Date</th>
+                      <th>End Date</th>
+                      <th>Interest Rate</th>
                       <th>Priority</th>
-                      <th>Active</th>
+                      <th>Status</th>
                       <th class="text-end">Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <?php while($l = $loansList->fetch_assoc()): ?>
+                    <?php while($ln = $loansList->fetch_assoc()): ?>
                     <tr>
-                      <td><?= h($l['name']) ?></td>
-                      <td class="text-end">₹<?= number_format($l['monthly_emi'], 2) ?></td>
-                      <td><?= h($l['start_date']) ?></td>
-                      <td><?= h($l['end_date'] ?? '') ?></td>
-                      <td><?= h($l['interest_rate'] ?? '') ?></td>
-                      <td><?= h($l['priority']) ?></td>
+                      <td><?= h($ln['name']) ?></td>
+                      <td>₹<?= number_format($ln['monthly_emi'], 2) ?></td>
+                      <td><?= h($ln['start_date']) ?></td>
+                      <td><?= h($ln['end_date'] ?? '—') ?></td>
+                      <td><?= $ln['interest_rate'] ? h($ln['interest_rate']).'%' : '—' ?></td>
+                      <td><?= (int)$ln['priority'] ?></td>
                       <td>
-                        <?= $l['active'] ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-secondary">No</span>' ?>
+                        <span class="badge <?= (int)$ln['active'] ? 'bg-success' : 'bg-secondary' ?>">
+                          <?= (int)$ln['active'] ? 'Active' : 'Inactive' ?>
+                        </span>
                       </td>
                       <td class="text-end">
                         <form method="post" onsubmit="return confirm('Delete loan?')" class="d-inline">
                           <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
                           <input type="hidden" name="action" value="delete_loan">
-                          <input type="hidden" name="id" value="<?= (int)$l['id'] ?>">
+                          <input type="hidden" name="id" value="<?= (int)$ln['id'] ?>">
                           <button class="btn btn-sm btn-outline-danger">Delete</button>
                         </form>
                       </td>
@@ -819,63 +922,89 @@ $upcomingBillsResult = $upcomingBills->get_result();
           </div>
         </div>
       </div>
-    <?php endif; ?>
-
-    <?php if($tab==='cards'): ?>
-      <div class="row">
-        <div class="col-md-4">
-          <div class="card">
-            <div class="card-header">Add Credit Card</div>
-            <div class="card-body">
-              <form method="post">
+      
+      <!-- Loan Modal -->
+      <div class="modal fade" id="loanModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Add Loan/EMI</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="post">
+              <div class="modal-body">
                 <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
-                <input type="hidden" name="action" value="save_cc">
+                <input type="hidden" name="action" value="save_loan">
+                <input type="hidden" name="id" value="0">
                 <div class="mb-3">
                   <label class="form-label">Name</label>
-                  <input class="form-control" name="name" required placeholder="e.g., OneCard">
+                  <input type="text" class="form-control" name="name" required>
                 </div>
-                <div class="mb-3">
-                  <label class="form-label">Limit (₹)</label>
-                  <input type="number" step="0.01" class="form-control" name="credit_limit">
+                <div class="row">
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Monthly EMI (₹)</label>
+                    <input type="number" step="0.01" class="form-control" name="monthly_emi" required>
+                  </div>
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Interest Rate (%)</label>
+                    <input type="number" step="0.01" class="form-control" name="interest_rate">
+                  </div>
                 </div>
-                <div class="mb-3">
-                  <label class="form-label">Interest %</label>
-                  <input type="number" step="0.01" class="form-control" name="interest_rate">
+                <div class="row">
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Start Date</label>
+                    <input type="date" class="form-control" name="start_date" required>
+                  </div>
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">End Date (optional)</label>
+                    <input type="date" class="form-control" name="end_date">
+                  </div>
                 </div>
-                <div class="mb-3">
-                  <label class="form-label">Billing Cycle Closing Day</label>
-                  <input type="number" class="form-control" name="closing_day" placeholder="e.g., 20">
+                <div class="row">
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Priority (1=highest)</label>
+                    <input type="number" min="1" class="form-control" name="priority" value="1" required>
+                  </div>
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Status</label>
+                    <select class="form-select" name="active">
+                      <option value="1" selected>Active</option>
+                      <option value="0">Inactive</option>
+                    </select>
+                  </div>
                 </div>
-                <div class="mb-3">
-                  <label class="form-label">Payment Due Day</label>
-                  <input type="number" class="form-control" name="due_day" placeholder="e.g., 27">
-                </div>
-                <div class="mb-3">
-                  <label class="form-label">Active</label>
-                  <select class="form-select" name="active">
-                    <option value="1" selected>Yes</option>
-                    <option value="0">No</option>
-                  </select>
-                </div>
-                <button class="btn btn-primary w-100">Save Card</button>
-              </form>
-            </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Loan</button>
+              </div>
+            </form>
           </div>
         </div>
-        <div class="col-md-8">
+      </div>
+    <?php endif; ?>
+    
+    <?php if($tab==='cards'): ?>
+      <div class="row">
+        <div class="col-12">
           <div class="card">
-            <div class="card-header">Credit Cards</div>
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <span>Credit Cards</span>
+              <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#cardModal">
+                <i class="bi bi-plus"></i> Add New
+              </button>
+            </div>
             <div class="card-body">
               <div class="table-responsive">
                 <table class="table table-sm">
                   <thead>
                     <tr>
                       <th>Name</th>
-                      <th>Limit</th>
-                      <th>Rate%</th>
-                      <th>Closing</th>
-                      <th>Due</th>
-                      <th>Active</th>
+                      <th>Credit Limit</th>
+                      <th>Interest Rate</th>
+                      <th>Closing Day</th>
+                      <th>Due Day</th>
+                      <th>Status</th>
                       <th class="text-end">Action</th>
                     </tr>
                   </thead>
@@ -883,15 +1012,17 @@ $upcomingBillsResult = $upcomingBills->get_result();
                     <?php while($cc = $cardsList->fetch_assoc()): ?>
                     <tr>
                       <td><?= h($cc['name']) ?></td>
-                      <td><?= $cc['credit_limit'] !== NULL ? '₹' . number_format($cc['credit_limit'], 2) : '—' ?></td>
-                      <td><?= h($cc['interest_rate'] ?? '—') ?></td>
-                      <td><?= h($cc['closing_day'] ?? '—') ?></td>
-                      <td><?= h($cc['due_day'] ?? '—') ?></td>
+                      <td><?= $cc['credit_limit'] ? '₹'.number_format($cc['credit_limit'], 2) : '—' ?></td>
+                      <td><?= $cc['interest_rate'] ? h($cc['interest_rate']).'%' : '—' ?></td>
+                      <td><?= $cc['closing_day'] ?? '—' ?></td>
+                      <td><?= $cc['due_day'] ?? '—' ?></td>
                       <td>
-                        <?= $cc['active'] ? '<span class="badge bg-success">Yes</span>' : '<span class="badge bg-secondary">No</span>' ?>
+                        <span class="badge <?= (int)$cc['active'] ? 'bg-success' : 'bg-secondary' ?>">
+                          <?= (int)$cc['active'] ? 'Active' : 'Inactive' ?>
+                        </span>
                       </td>
                       <td class="text-end">
-                        <form method="post" onsubmit="return confirm('Delete card?')" class="d-inline">
+                        <form method="post" onsubmit="return confirm('Delete credit card?')" class="d-inline">
                           <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
                           <input type="hidden" name="action" value="delete_cc">
                           <input type="hidden" name="id" value="<?= (int)$cc['id'] ?>">
@@ -907,132 +1038,174 @@ $upcomingBillsResult = $upcomingBills->get_result();
           </div>
         </div>
       </div>
+      
+      <!-- Credit Card Modal -->
+      <div class="modal fade" id="cardModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Add Credit Card</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="post">
+              <div class="modal-body">
+                <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
+                <input type="hidden" name="action" value="save_cc">
+                <input type="hidden" name="id" value="0">
+                <div class="mb-3">
+                  <label class="form-label">Card Name</label>
+                  <input type="text" class="form-control" name="name" required>
+                </div>
+                <div class="row">
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Credit Limit (₹)</label>
+                    <input type="number" step="0.01" class="form-control" name="credit_limit">
+                  </div>
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Interest Rate (%)</label>
+                    <input type="number" step="0.01" class="form-control" name="interest_rate">
+                  </div>
+                </div>
+                <div class="row">
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Closing Day</label>
+                    <input type="number" min="1" max="31" class="form-control" name="closing_day">
+                  </div>
+                  <div class="col-md-6 mb-3">
+                    <label class="form-label">Due Day</label>
+                    <input type="number" min="1" max="31" class="form-control" name="due_day">
+                  </div>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Status</label>
+                  <select class="form-select" name="active">
+                    <option value="1" selected>Active</option>
+                    <option value="0">Inactive</option>
+                  </select>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Card</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
     <?php endif; ?>
-
+    
     <?php if($tab==='import'): ?>
       <div class="row">
         <div class="col-md-6">
           <div class="card">
-            <div class="card-header">Import Transactions (CSV)</div>
+            <div class="card-header">Export Data</div>
             <div class="card-body">
-              <form method="post" enctype="multipart/form-data">
+              <p>Export all transactions to a CSV file for backup or analysis.</p>
+              <form method="post">
                 <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
-                <input type="hidden" name="action" value="import_csv">
-                <div class="mb-3">
-                  <input class="form-control" type="file" name="csv" accept=".csv" required>
-                </div>
-                <button class="btn btn-primary">Import</button>
+                <input type="hidden" name="action" value="export_csv">
+                <button type="submit" class="btn btn-primary">
+                  <i class="bi bi-download"></i> Export CSV
+                </button>
               </form>
-              <div class="small text-muted mt-3">
-                CSV columns accepted: <code>date,type,category,amount,account,notes</code>. Extra columns are ignored.
-              </div>
             </div>
           </div>
         </div>
         <div class="col-md-6">
           <div class="card">
-            <div class="card-header">Export Transactions</div>
+            <div class="card-header">Import Data</div>
             <div class="card-body">
-              <form method="post">
+              <p>Import transactions from a CSV file. The CSV should have columns: Date, Type, Category, Amount, Account, Notes, User.</p>
+              <form method="post" enctype="multipart/form-data">
                 <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
-                <input type="hidden" name="action" value="export_csv">
-                <button class="btn btn-outline-primary">Download CSV</button>
+                <input type="hidden" name="action" value="import_csv">
+                <div class="mb-3">
+                  <label class="form-label">CSV File</label>
+                  <input type="file" class="form-control" name="csv" accept=".csv" required>
+                </div>
+                <button type="submit" class="btn btn-primary">
+                  <i class="bi bi-upload"></i> Import CSV
+                </button>
               </form>
             </div>
           </div>
         </div>
       </div>
     <?php endif; ?>
-
-    <div class="text-center text-muted mt-5 mb-4 small">
-      Built with ❤️ using PHP + Bootstrap + MySQL
-    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // Initialize charts
-    document.addEventListener('DOMContentLoaded', function() {
-      <?php if($tab === 'dashboard'): ?>
-        // Financial Overview Chart
-        const financialCtx = document.getElementById('financialChart').getContext('2d');
-        const financialChart = new Chart(financialCtx, {
-          type: 'bar',
-          data: {
-            labels: <?= json_encode($labels) ?>,
-            datasets: [
-              {
-                label: 'Income',
-                data: <?= json_encode(array_slice($series, 0, count($labels))) ?>,
-                backgroundColor: 'rgba(67, 97, 238, 0.7)',
-                borderColor: 'rgba(67, 97, 238, 1)',
-                borderWidth: 1
-              },
-              {
-                label: 'Expenses',
-                data: <?= json_encode(array_slice($series, 0, count($labels))) ?>,
-                backgroundColor: 'rgba(247, 37, 133, 0.7)',
-                borderColor: 'rgba(247, 37, 133, 1)',
-                borderWidth: 1
-              }
-            ]
+    // Category modal type setting
+    document.getElementById('categoryModal').addEventListener('show.bs.modal', function (event) {
+      var button = event.relatedTarget;
+      var type = button.getAttribute('data-type');
+      document.getElementById('categoryType').value = type;
+    });
+    
+    // Charts
+    <?php if($tab==='dashboard'): ?>
+    // Financial Overview Chart
+    new Chart(document.getElementById('financialChart').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: <?= json_encode($labels) ?>,
+        datasets: [{
+          label: 'Net Savings',
+          data: <?= json_encode($series) ?>,
+          backgroundColor: 'rgba(67, 97, 238, 0.5)',
+          borderColor: 'rgba(67, 97, 238, 1)',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            beginAtZero: true,
+            grid: {
+              drawBorder: false
+            }
           },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              y: {
-                beginAtZero: true,
-                grid: {
-                  drawBorder: false
-                }
-              },
-              x: {
-                grid: {
-                  display: false
-                }
-              }
-            },
-            plugins: {
-              legend: {
-                position: 'top',
-              }
+          x: {
+            grid: {
+              display: false
             }
           }
-        });
-        
-        // Expense Breakdown Chart
-        const expenseCtx = document.getElementById('expenseChart').getContext('2d');
-        const expenseChart = new Chart(expenseCtx, {
-          type: 'doughnut',
-          data: {
-            labels: <?= json_encode(array_column($expenseBreakdown, 'name')) ?>,
-            datasets: [{
-              data: <?= json_encode(array_column($expenseBreakdown, 'total')) ?>,
-              backgroundColor: [
-                '#4361ee',
-                '#4cc9f0',
-                '#f72585',
-                '#f8961e',
-                '#4895ef',
-                '#7209b7'
-              ],
-              borderWidth: 0
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: {
-                position: 'bottom'
-              }
-            },
-            cutout: '70%'
-          }
-        });
-      <?php endif; ?>
+        }
+      }
     });
+    
+    // Expense Breakdown Chart
+    new Chart(document.getElementById('expenseChart').getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: <?= json_encode(array_column($expenseBreakdown, 'name')) ?>,
+        datasets: [{
+          data: <?= json_encode(array_column($expenseBreakdown, 'total')) ?>,
+          backgroundColor: [
+            'rgba(67, 97, 238, 0.7)',
+            'rgba(247, 37, 133, 0.7)',
+            'rgba(76, 201, 240, 0.7)',
+            'rgba(248, 150, 30, 0.7)',
+            'rgba(72, 149, 239, 0.7)',
+            'rgba(63, 55, 201, 0.7)',
+            'rgba(248, 249, 250, 0.7)',
+            'rgba(33, 37, 41, 0.7)'
+          ],
+          borderWidth: 1
+        }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right'
+          }
+        }
+      }
+    });
+    <?php endif; ?>
   </script>
 </body>
 </html>

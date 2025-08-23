@@ -1,17 +1,7 @@
 <?php
 // Initialize database and create user table
 
-// Database configuration
-define('DB_HOST', 'localhost');
-define('DB_USER', 'u831088057_finman');
-define('DB_PASS', 'Anakaya@05');
-define('DB_NAME', 'u831088057_finman');
-
-// Connect to database
-$mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS);
-if ($mysqli->connect_error) {
-    die("Connection failed: " . $mysqli->connect_error);
-}
+include 'db.php';
 
 // Create database if not exists
 $mysqli->query("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");

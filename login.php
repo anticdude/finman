@@ -4,17 +4,7 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Database configuration
-define('DB_HOST', 'localhost');
-define('DB_USER', 'u831088057_finman');
-define('DB_PASS', 'Anakaya@05');
-define('DB_NAME', 'u831088057_finman');
-
-// Connect to database
-$mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-if ($mysqli->connect_error) {
-    die("Connection failed: " . $mysqli->connect_error);
-}
+include 'db.php';
 
 // Check if user is already logged in
 if (isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true) {

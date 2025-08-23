@@ -1,15 +1,5 @@
 <?php
-// Database configuration
-define('DB_HOST', 'localhost');
-define('DB_USER', 'u831088057_finman');
-define('DB_PASS', 'Anakaya@05');
-define('DB_NAME', 'u831088057_finman');
-
-// Connect to database
-$mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-if ($mysqli->connect_error) {
-    die("Connection failed: " . $mysqli->connect_error);
-}
+include 'db.php';
 
 // Create user with hashed password
 $email = 'patelankit.pa05@gmail.com';
