@@ -5,23 +5,6 @@ require_once 'auth.php';
 // Redirect to login if not authenticated
 requireLogin();
 include 'db.php';
-// Database configuration
-// $CONFIG = [
-//   'DB_HOST' => 'localhost',
-//   'DB_USER' => 'u831088057_finman',
-//   'DB_PASS' => 'Anakaya@05',
-//   'DB_NAME' => 'u831088057_finman',
-//   'APP_NAME' => 'Smart Finance Manager',
-// ];
-
-// // ===================== DB CONNECTION ===================== //
-// mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-// try {
-//     $mysqli = new mysqli($CONFIG['DB_HOST'], $CONFIG['DB_USER'], $CONFIG['DB_PASS'], $CONFIG['DB_NAME']);
-//     $mysqli->set_charset('utf8mb4');
-// } catch (Exception $e) {
-//     die("Database connection failed: " . $e->getMessage());
-// }
 
 // ===================== HELPERS ===================== //
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
@@ -82,8 +65,7 @@ if ($action==='save_txn') {
 }
 if ($action==='delete_txn') { $id=(int)post('id'); $stmt=$mysqli->prepare("DELETE FROM transactions WHERE id=?"); $stmt->bind_param('i',$id); $stmt->execute(); header('Location:?tab=transactions'); exit; }
 
-// Loans
-// Replace the existing save_loan action with this:
+// Loans - FIXED VERSION
 if ($action==='save_loan') {
   $id=(int)post('id',0); $name=trim(post('name')); $emi=(float)post('monthly_emi'); 
   $start=post('start_date'); $due=post('due_date')?:NULL; $end=post('end_date')?:NULL; 
@@ -93,11 +75,70 @@ if ($action==='save_loan') {
   
   if ($id>0) { 
     $stmt=$mysqli->prepare("UPDATE loans SET name=?, monthly_emi=?, start_date=?, due_date=?, end_date=?, interest_rate=?, priority=?, notes=?, payment_status=?, active=? WHERE id=?"); 
-    $stmt->bind_param('sdssssdissii',$name,$emi,$start,$due,$end,$rate,$priority,$notes,$status,$active,$id); 
+    
+    // Handle NULL values properly
+    $types = 'sd'; // name (string), monthly_emi (double)
+    $params = array(&$name, &$emi);
+    
+    // Add start_date, due_date, end_date (strings or NULL)
+    $types .= 'sss';
+    $params[] = &$start;
+    $params[] = &$due;
+    $params[] = &$end;
+    
+    // Add interest_rate (double or NULL)
+    $types .= 'd';
+    $params[] = &$rate;
+    
+    // Add priority (integer), notes (string)
+    $types .= 'is';
+    $params[] = &$priority;
+    $params[] = &$notes;
+    
+    // Add payment_status (string), active (integer)
+    $types .= 'si';
+    $params[] = &$status;
+    $params[] = &$active;
+    
+    // Add id (integer)
+    $types .= 'i';
+    $params[] = &$id;
+    
+    // Use call_user_func_array to bind parameters
+    array_unshift($params, $types);
+    call_user_func_array(array($stmt, 'bind_param'), $params);
   } else { 
     $stmt=$mysqli->prepare("INSERT INTO loans (name,monthly_emi,start_date,due_date,end_date,interest_rate,priority,notes,payment_status,active) VALUES (?,?,?,?,?,?,?,?,?,?)"); 
-    $stmt->bind_param('sdssssdissi',$name,$emi,$start,$due,$end,$rate,$priority,$notes,$status,$active); 
+    
+    // Handle NULL values properly for INSERT
+    $types = 'sd'; // name (string), monthly_emi (double)
+    $params = array(&$name, &$emi);
+    
+    // Add start_date, due_date, end_date (strings or NULL)
+    $types .= 'sss';
+    $params[] = &$start;
+    $params[] = &$due;
+    $params[] = &$end;
+    
+    // Add interest_rate (double or NULL)
+    $types .= 'd';
+    $params[] = &$rate;
+    
+    // Add priority (integer), notes (string)
+    $types .= 'is';
+    $params[] = &$priority;
+    $params[] = &$notes;
+    
+    // Add payment_status (string), active (integer)
+    $types .= 'si';
+    $params[] = &$status;
+    $params[] = &$active;
+    
+    // Use call_user_func_array to bind parameters
+    array_unshift($params, $types);
+    call_user_func_array(array($stmt, 'bind_param'), $params);
   }
+  
   $stmt->execute(); 
   
   // If it's a new loan and active, create a transaction for the current month
@@ -204,6 +245,23 @@ while ($row = $expenseResult->fetch_assoc()) {
     $expenseBreakdown[] = $row;
 }
 
+// Income breakdown by category
+$incomeBreakdown = [];
+$incomeStmt = $mysqli->prepare("
+    SELECT c.name, SUM(t.amount) as total 
+    FROM transactions t 
+    JOIN categories c ON t.category_id = c.id 
+    WHERE t.dt BETWEEN ? AND ? AND t.type = 'income' 
+    GROUP BY c.name 
+    ORDER BY total DESC
+");
+$incomeStmt->bind_param('ss', $start, $end);
+$incomeStmt->execute();
+$incomeResult = $incomeStmt->get_result();
+while ($row = $incomeResult->fetch_assoc()) {
+    $incomeBreakdown[] = $row;
+}
+
 // Lists
 $catsIncome=$mysqli->query("SELECT * FROM categories WHERE type='income' ORDER BY name");
 $catsExpense=$mysqli->query("SELECT * FROM categories WHERE type='expense' ORDER BY name");
@@ -238,15 +296,39 @@ $upcomingBills->bind_param('ss', $start, $start);
 $upcomingBills->execute();
 $upcomingBillsResult = $upcomingBills->get_result();
 
+// Top spending categories
+$topSpending = $mysqli->prepare("
+    SELECT c.name, SUM(t.amount) as total 
+    FROM transactions t 
+    JOIN categories c ON t.category_id = c.id 
+    WHERE t.dt BETWEEN ? AND ? AND t.type = 'expense' 
+    GROUP BY c.name 
+    ORDER BY total DESC 
+    LIMIT 5
+");
+$topSpending->bind_param('ss', $start, $start);
+$topSpending->execute();
+$topSpendingResult = $topSpending->get_result();
+
+// Credit card utilization
+$creditUtilization = $mysqli->query("
+    SELECT name, credit_limit, 
+    (SELECT SUM(amount) FROM transactions WHERE account = name AND type = 'expense' AND dt BETWEEN '$start' AND '$end') as spent,
+    (credit_limit - (SELECT SUM(amount) FROM transactions WHERE account = name AND type = 'expense' AND dt BETWEEN '$start' AND '$end')) as remaining
+    FROM credit_cards 
+    WHERE active = 1
+");
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fixed Responsive Navbar</title>
+    <title>Smart Finance Manager</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --primary: #4361ee;
@@ -393,6 +475,12 @@ $upcomingBillsResult = $upcomingBills->get_result();
             border-color: var(--secondary);
         }
         
+        /* Progress bars */
+        .progress {
+            height: 8px;
+            margin-bottom: 5px;
+        }
+        
         /* Responsive adjustments */
         @media (max-width: 767.98px) {
             body {
@@ -410,6 +498,18 @@ $upcomingBillsResult = $upcomingBills->get_result();
                 font-size: 16px;
             }
         }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+        
+        .mini-chart-container {
+            position: relative;
+            height: 200px;
+            width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -426,37 +526,36 @@ $upcomingBillsResult = $upcomingBills->get_result();
             <div class="collapse navbar-collapse" id="navbarContent">
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                     <li class="nav-item">
-                        <a class="nav-link active" href="?tab=dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
+                        <a class="nav-link <?= $tab === 'dashboard' ? 'active' : '' ?>" href="?tab=dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="?tab=transactions"><i class="bi bi-arrow-left-right"></i> Transactions</a>
+                        <a class="nav-link <?= $tab === 'transactions' ? 'active' : '' ?>" href="?tab=transactions"><i class="bi bi-arrow-left-right"></i> Transactions</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="?tab=categories"><i class="bi bi-tag"></i> Categories</a>
+                        <a class="nav-link <?= $tab === 'categories' ? 'active' : '' ?>" href="?tab=categories"><i class="bi bi-tag"></i> Categories</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="?tab=users"><i class="bi bi-people"></i> Users</a>
+                        <a class="nav-link <?= $tab === 'users' ? 'active' : '' ?>" href="?tab=users"><i class="bi bi-people"></i> Users</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="?tab=loans"><i class="bi bi-currency-exchange"></i> Loans & EMIs</a>
+                        <a class="nav-link <?= $tab === 'loans' ? 'active' : '' ?>" href="?tab=loans"><i class="bi bi-currency-exchange"></i> Loans & EMIs</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="?tab=cards"><i class="bi bi-credit-card"></i> Credit Cards</a>
+                        <a class="nav-link <?= $tab === 'cards' ? 'active' : '' ?>" href="?tab=cards"><i class="bi bi-credit-card"></i> Credit Cards</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="?tab=import"><i class="bi bi-upload"></i> Import/Export</a>
+                        <a class="nav-link <?= $tab === 'import' ? 'active' : '' ?>" href="?tab=import"><i class="bi bi-upload"></i> Import/Export</a>
                     </li>
                 </ul>
                 
                 <ul class="navbar-nav">
                     <li class="nav-item">
-                        <a class="nav-link text-danger" href="#"><i class="bi bi-box-arrow-right"></i> Logout</a>
+                        <a class="nav-link text-danger" href="logout.php"><i class="bi bi-box-arrow-right"></i> Logout</a>
                     </li>
                 </ul>
             </div>
         </div>
     </nav>
-
 
 <!-- Content -->
     <div class="container-fluid">
@@ -482,7 +581,7 @@ $upcomingBillsResult = $upcomingBills->get_result();
                     <?php endif; ?>
                 </p>
             </div>
-      <div class="d-flex">
+            <div class="d-flex">
                 <div class="me-2">
                     <form method="get">
                         <input type="hidden" name="tab" value="<?= h($tab) ?>">
@@ -499,130 +598,190 @@ $upcomingBillsResult = $upcomingBills->get_result();
     
     <?php if($tab==='dashboard'): ?>
       <!-- KPI Cards -->
-<div class="row">
-                <div class="col-md-3 col-6">
-                    <div class="card kpi-card">
-                        <div class="icon bg-success bg-opacity-10 text-success">
-                            <i class="bi bi-arrow-down-left"></i>
-                        </div>
-                        <div class="value text-success">₹<?= number_format($income, 2) ?></div>
-                        <div class="title">Total Income</div>
-                    </div>
-                </div>
-                <div class="col-md-3 col-6">
-                    <div class="card kpi-card">
-                        <div class="icon bg-danger bg-opacity-10 text-danger">
-                            <i class="bi bi-arrow-up-right"></i>
-                        </div>
-                        <div class="value text-danger">₹<?= number_format($expense, 2) ?></div>
-                        <div class="title">Total Expenses</div>
-                    </div>
-                </div>
-                <div class="col-md-3 col-6">
-                    <div class="card kpi-card">
-                        <div class="icon bg-info bg-opacity-10 text-info">
-                            <i class="bi bi-graph-up"></i>
-                        </div>
-                        <div class="value text-info">₹<?= number_format($net, 2) ?></div>
-                        <div class="title">Net Savings</div>
-                    </div>
-                </div>
-                <div class="col-md-3 col-6">
-                    <div class="card kpi-card">
-                        <div class="icon bg-warning bg-opacity-10 text-warning">
-                            <i class="bi bi-calendar-check"></i>
-                        </div>
-                        <div class="value text-warning">₹<?= number_format($sumUpcomingEmi, 2) ?></div>
-                        <div class="title">Upcoming EMIs</div>
-                    </div>
-                </div>
-            </div>
+      <div class="row">
+          <div class="col-md-3 col-6">
+              <div class="card kpi-card">
+                  <div class="icon bg-success bg-opacity-10 text-success">
+                      <i class="bi bi-arrow-down-left"></i>
+                  </div>
+                  <div class="value text-success">₹<?= number_format($income, 2) ?></div>
+                  <div class="title">Total Income</div>
+              </div>
+          </div>
+          <div class="col-md-3 col-6">
+              <div class="card kpi-card">
+                  <div class="icon bg-danger bg-opacity-10 text-danger">
+                      <i class="bi bi-arrow-up-right"></i>
+                  </div>
+                  <div class="value text-danger">₹<?= number_format($expense, 2) ?></div>
+                  <div class="title">Total Expenses</div>
+              </div>
+          </div>
+          <div class="col-md-3 col-6">
+              <div class="card kpi-card">
+                  <div class="icon bg-info bg-opacity-10 text-info">
+                      <i class="bi bi-graph-up"></i>
+                  </div>
+                  <div class="value text-info">₹<?= number_format($net, 2) ?></div>
+                  <div class="title">Net Savings</div>
+              </div>
+          </div>
+          <div class="col-md-3 col-6">
+              <div class="card kpi-card">
+                  <div class="icon bg-warning bg-opacity-10 text-warning">
+                      <i class="bi bi-calendar-check"></i>
+                  </div>
+                  <div class="value text-warning">₹<?= number_format($sumUpcomingEmi, 2) ?></div>
+                  <div class="title">Upcoming EMIs</div>
+              </div>
+          </div>
+      </div>
       
       <!-- Charts & Overview -->
-            <div class="row">
-                <div class="col-lg-8">
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <span>Financial Overview</span>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <button type="button" class="btn btn-outline-secondary active">Monthly</button>
-                                <button type="button" class="btn btn-outline-secondary">Quarterly</button>
-                                <button type="button" class="btn btn-outline-secondary">Yearly</button>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="chart-container">
-                                <canvas id="financialChart"></canvas>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="col-lg-4">
-                    <div class="card">
-                        <div class="card-header">Expense Breakdown</div>
-                        <div class="card-body">
-                            <div class="chart-container">
-                                <canvas id="expenseChart"></canvas>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Recent Transactions & Upcoming Bills -->
-            <div class="row">
-                <div class="col-lg-6">
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <span>Recent Transactions</span>
-                            <a href="?tab=transactions" class="btn btn-sm btn-link">View All</a>
-                        </div>
-                        <div class="card-body p-0">
-                            <div class="list-group list-group-flush">
-                                <?php while($t = $recentTxnsResult->fetch_assoc()): ?>
-                                <div class="list-group-item d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <div class="fw-bold"><?= h($t['cat'] ?? 'Uncategorized') ?></div>
-                                        <small class="text-muted"><?= h($t['dt']) ?> • <?= h($t['account'] ?? 'No Account') ?> • <?= h($t['user'] ?? 'No User') ?></small>
-                                    </div>
-                                    <span class="<?= $t['type'] === 'income' ? 'text-success' : 'text-danger' ?>">
-                                        <?= $t['type'] === 'income' ? '+' : '-' ?>₹<?= number_format($t['amount'], 2) ?>
-                                    </span>
-                                </div>
-                                <?php endwhile; ?>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="col-lg-6">
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <span>Upcoming Bills & EMIs</span>
-                            <a href="?tab=loans" class="btn btn-sm btn-link">View All</a>
-                        </div>
-                        <div class="card-body p-0">
-                            <div class="list-group list-group-flush">
-                                <?php while($ln = $upcomingBillsResult->fetch_assoc()): ?>
-                                <div class="list-group-item d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <div class="fw-bold"><?= h($ln['name']) ?></div>
-                                        <small class="text-muted">Due on <?= h(date('M j, Y', strtotime($ln['start_date']))) ?></small>
-                                        <?php if ($ln['payment_status'] === 'overdue'): ?>
-                                            <span class="badge bg-danger mt-1">Overdue</span>
-                                        <?php endif; ?>
-                                    </div>
-                                    <span class="text-warning">₹<?= number_format($ln['monthly_emi'], 2) ?></span>
-                                </div>
-                                <?php endwhile; ?>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        <?php endif; ?>
-
+      <div class="row">
+          <div class="col-lg-8">
+              <div class="card">
+                  <div class="card-header d-flex justify-content-between align-items-center">
+                      <span>Financial Overview</span>
+                      <div class="btn-group btn-group-sm" role="group">
+                          <button type="button" class="btn btn-outline-secondary active">Monthly</button>
+                          <button type="button" class="btn btn-outline-secondary">Quarterly</button>
+                          <button type="button" class="btn btn-outline-secondary">Yearly</button>
+                      </div>
+                  </div>
+                  <div class="card-body">
+                      <div class="chart-container">
+                          <canvas id="financialChart"></canvas>
+                      </div>
+                  </div>
+              </div>
+          </div>
+          
+          <div class="col-lg-4">
+              <div class="card">
+                  <div class="card-header">Expense Breakdown</div>
+                  <div class="card-body">
+                      <div class="chart-container">
+                          <canvas id="expenseChart"></canvas>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      </div>
+      
+      <!-- Additional Dashboard Panels -->
+      <div class="row">
+          <!-- Income Breakdown -->
+          <div class="col-lg-4">
+              <div class="card">
+                  <div class="card-header">Income Sources</div>
+                  <div class="card-body">
+                      <div class="mini-chart-container">
+                          <canvas id="incomeChart"></canvas>
+                      </div>
+                  </div>
+              </div>
+          </div>
+          
+          <!-- Top Spending Categories -->
+          <div class="col-lg-4">
+              <div class="card">
+                  <div class="card-header">Top Spending Categories</div>
+                  <div class="card-body">
+                      <div class="list-group list-group-flush">
+                          <?php while($cat = $topSpendingResult->fetch_assoc()): ?>
+                          <div class="list-group-item d-flex justify-content-between align-items-center">
+                              <span><?= h($cat['name']) ?></span>
+                              <span class="text-danger">₹<?= number_format($cat['total'], 2) ?></span>
+                          </div>
+                          <?php endwhile; ?>
+                      </div>
+                  </div>
+              </div>
+          </div>
+          
+          <!-- Credit Card Utilization -->
+          <div class="col-lg-4">
+              <div class="card">
+                  <div class="card-header">Credit Card Utilization</div>
+                  <div class="card-body">
+                      <?php while($cc = $creditUtilization->fetch_assoc()): 
+                          if ($cc['credit_limit'] > 0):
+                              $utilization = ($cc['spent'] / $cc['credit_limit']) * 100;
+                              $progressClass = $utilization > 75 ? 'bg-danger' : ($utilization > 50 ? 'bg-warning' : 'bg-success');
+                      ?>
+                          <div class="mb-3">
+                              <div class="d-flex justify-content-between mb-1">
+                                  <span><?= h($cc['name']) ?></span>
+                                  <span><?= number_format($utilization, 1) ?>%</span>
+                              </div>
+                              <div class="progress">
+                                  <div class="progress-bar <?= $progressClass ?>" role="progressbar" 
+                                       style="width: <?= $utilization ?>%;" 
+                                       aria-valuenow="<?= $utilization ?>" aria-valuemin="0" aria-valuemax="100"></div>
+                              </div>
+                              <small class="text-muted">
+                                  ₹<?= number_format($cc['spent'] ?? 0, 2) ?> of ₹<?= number_format($cc['credit_limit'], 2) ?>
+                              </small>
+                          </div>
+                      <?php endif; endwhile; ?>
+                  </div>
+              </div>
+          </div>
+      </div>
+      
+      <!-- Recent Transactions & Upcoming Bills -->
+      <div class="row">
+          <div class="col-lg-6">
+              <div class="card">
+                  <div class="card-header d-flex justify-content-between align-items-center">
+                      <span>Recent Transactions</span>
+                      <a href="?tab=transactions" class="btn btn-sm btn-link">View All</a>
+                  </div>
+                  <div class="card-body p-0">
+                      <div class="list-group list-group-flush">
+                          <?php while($t = $recentTxnsResult->fetch_assoc()): ?>
+                          <div class="list-group-item d-flex justify-content-between align-items-center">
+                              <div>
+                                  <div class="fw-bold"><?= h($t['cat'] ?? 'Uncategorized') ?></div>
+                                  <small class="text-muted"><?= h($t['dt']) ?> • <?= h($t['account'] ?? 'No Account') ?> • <?= h($t['user'] ?? 'No User') ?></small>
+                              </div>
+                              <span class="<?= $t['type'] === 'income' ? 'text-success' : 'text-danger' ?>">
+                                  <?= $t['type'] === 'income' ? '+' : '-' ?>₹<?= number_format($t['amount'], 2) ?>
+                              </span>
+                          </div>
+                          <?php endwhile; ?>
+                      </div>
+                  </div>
+              </div>
+          </div>
+          
+          <div class="col-lg-6">
+              <div class="card">
+                  <div class="card-header d-flex justify-content-between align-items-center">
+                      <span>Upcoming Bills & EMIs</span>
+                      <a href="?tab=loans" class="btn btn-sm btn-link">View All</a>
+                  </div>
+                  <div class="card-body p-0">
+                      <div class="list-group list-group-flush">
+                          <?php while($ln = $upcomingBillsResult->fetch_assoc()): ?>
+                          <div class="list-group-item d-flex justify-content-between align-items-center">
+                              <div>
+                                  <div class="fw-bold"><?= h($ln['name']) ?></div>
+                                  <small class="text-muted">Due on <?= h(date('M j, Y', strtotime($ln['start_date']))) ?></small>
+                                  <?php if ($ln['payment_status'] === 'overdue'): ?>
+                                      <span class="badge bg-danger mt-1">Overdue</span>
+                                  <?php endif; ?>
+                              </div>
+                              <span class="text-warning">₹<?= number_format($ln['monthly_emi'], 2) ?></span>
+                          </div>
+                          <?php endwhile; ?>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      </div>
+    <?php endif; ?>
 
     <?php if($tab==='transactions'): ?>
       <div class="row">
@@ -1174,7 +1333,7 @@ $upcomingBillsResult = $upcomingBills->get_result();
                 <textarea class="form-control" name="notes" rows="2"></textarea>
               </div>
             </div>
-          </div>
+            </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
             <button type="submit" class="btn btn-primary">Save Loan</button>
@@ -1238,21 +1397,6 @@ $upcomingBillsResult = $upcomingBills->get_result();
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // Sidebar toggle functionality
-    const sidebar = document.getElementById('sidebar');
-    const overlay = document.getElementById('overlay');
-    const sidebarToggle = document.getElementById('sidebarToggle');
-    const closeSidebar = document.getElementById('closeSidebar');
-    
-    function toggleSidebar() {
-      sidebar.classList.toggle('active');
-      overlay.classList.toggle('active');
-    }
-    
-    sidebarToggle.addEventListener('click', toggleSidebar);
-    closeSidebar.addEventListener('click', toggleSidebar);
-    overlay.addEventListener('click', toggleSidebar);
-    
     // Edit functions
     function editTransaction(id, dt, type, categoryId, amount, account, notes, userId) {
       document.getElementById('txn_id').value = id;
@@ -1357,7 +1501,12 @@ $upcomingBillsResult = $upcomingBills->get_result();
             },
             tooltip: {
               mode: 'index',
-              intersect: false
+              intersect: false,
+              callbacks: {
+                label: function(context) {
+                  return '₹' + context.raw.toFixed(2);
+                }
+              }
             }
           },
           scales: {
@@ -1365,6 +1514,11 @@ $upcomingBillsResult = $upcomingBills->get_result();
               beginAtZero: true,
               grid: {
                 drawBorder: false
+              },
+              ticks: {
+                callback: function(value) {
+                  return '₹' + value;
+                }
               }
             },
             x: {
@@ -1396,6 +1550,45 @@ $upcomingBillsResult = $upcomingBills->get_result();
           plugins: {
             legend: {
               position: 'bottom'
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  return context.label + ': ₹' + context.raw.toFixed(2);
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      // Income Breakdown Chart
+      const incomeCtx = document.getElementById('incomeChart').getContext('2d');
+      const incomeChart = new Chart(incomeCtx, {
+        type: 'doughnut',
+        data: {
+          labels: <?= json_encode(array_column($incomeBreakdown, 'name')) ?>,
+          datasets: [{
+            data: <?= json_encode(array_column($incomeBreakdown, 'total')) ?>,
+            backgroundColor: [
+              '#4cc9f0', '#4895ef', '#4361ee', '#3f37c9', '#560bad',
+              '#7209b7', '#b5179e', '#f72585', '#f8961e', '#4cc9f0'
+            ]
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'bottom'
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  return context.label + ': ₹' + context.raw.toFixed(2);
+                }
+              }
             }
           }
         }
